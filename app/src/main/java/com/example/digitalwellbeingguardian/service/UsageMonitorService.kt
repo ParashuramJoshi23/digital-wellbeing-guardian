@@ -78,6 +78,7 @@ class UsageMonitorService : Service() {
             }
         }
 
+        saveLiveStatus(isRunning = true)
         startForeground(ONGOING_NOTIFICATION_ID, ongoingNotification())
         if (pollingJob?.isActive != true) {
             pollingJob = serviceScope.launch {
@@ -137,6 +138,12 @@ class UsageMonitorService : Service() {
         }
 
         lastPollTime = now
+        saveLiveStatus(
+            isRunning = true,
+            activePackage = activePackage,
+            activeStartTime = activeStartTime,
+            lastPollTime = lastPollTime
+        )
         getSystemService(NotificationManager::class.java).notify(ONGOING_NOTIFICATION_ID, ongoingNotification())
     }
 
@@ -238,6 +245,20 @@ class UsageMonitorService : Service() {
             .notify(INTERVENTION_NOTIFICATION_ID, notification)
     }
 
+    private fun saveLiveStatus(
+        isRunning: Boolean,
+        activePackage: String? = this.activePackage,
+        activeStartTime: Long = this.activeStartTime,
+        lastPollTime: Long = this.lastPollTime
+    ) {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putBoolean(KEY_SERVICE_RUNNING, isRunning)
+            .putString(KEY_ACTIVE_PACKAGE, activePackage)
+            .putLong(KEY_ACTIVE_START_MS, activeStartTime)
+            .putLong(KEY_LAST_POLL_MS, lastPollTime)
+            .apply()
+    }
+
     private fun createChannels() {
         val manager = getSystemService(NotificationManager::class.java)
 
@@ -259,6 +280,7 @@ class UsageMonitorService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        saveLiveStatus(isRunning = false, activePackage = null, activeStartTime = 0L)
         unregisterReceiver(screenReceiver)
         pollingJob?.cancel()
         serviceScope.cancel()
@@ -283,6 +305,10 @@ class UsageMonitorService : Service() {
 
         const val PREFS = "guardian_prefs"
         const val KEY_REASON = "extension_reason"
+        const val KEY_SERVICE_RUNNING = "service_running"
+        const val KEY_ACTIVE_PACKAGE = "active_package"
+        const val KEY_ACTIVE_START_MS = "active_start_ms"
+        const val KEY_LAST_POLL_MS = "last_poll_ms"
 
         fun start(context: Context) {
             val intent = Intent(context, UsageMonitorService::class.java)

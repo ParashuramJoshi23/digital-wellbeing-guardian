@@ -6,11 +6,16 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 private const val RUNAWAY_THRESHOLD_MS = 20 * 60 * 1000L
+private const val NEAR_RUNAWAY_LOWER_MS = 10 * 60 * 1000L
+private const val MICRO_CHECK_MS = 60 * 1000L
+private const val BURST_GAP_MS = 5 * 60 * 1000L
 
 data class DailySummary(
     val totalTrackedMs: Long,
     val longestSessionMs: Long,
-    val sessionsOverThreshold: Int
+    val sessionsOverThreshold: Int,
+    val nearRunawaySessions: Int,
+    val microCheckScore: Int
 )
 
 class GuardianRepository(
@@ -69,15 +74,28 @@ class GuardianRepository(
 
     suspend fun trackedPackageNames(): List<String> = trackedAppDao.activePackages()
 
+    suspend fun allSessions(): List<SessionEntity> = sessionDao.allSessions()
+
+    suspend fun allTrackedApps(): List<TrackedAppEntity> = trackedAppDao.allApps()
+
     fun observeSummaryFor(date: LocalDate): Flow<DailySummary> {
         val zone = ZoneId.systemDefault()
         val start = date.atStartOfDay(zone).toInstant().toEpochMilli()
         val end = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         return sessionDao.sessionsForDay(start, end).map { sessions ->
+            val microChecks = sessions.count { it.durationMs in 1..MICRO_CHECK_MS }
+
+            val sorted = sessions.sortedBy { it.startTime }
+            val burstReentries = sorted.zipWithNext().count { (a, b) ->
+                b.packageName == a.packageName && (b.startTime - a.endTime) in 0..BURST_GAP_MS
+            }
+
             DailySummary(
                 totalTrackedMs = sessions.sumOf { it.durationMs },
                 longestSessionMs = sessions.maxOfOrNull { it.durationMs } ?: 0L,
-                sessionsOverThreshold = sessions.count { it.durationMs > RUNAWAY_THRESHOLD_MS }
+                sessionsOverThreshold = sessions.count { it.durationMs > RUNAWAY_THRESHOLD_MS },
+                nearRunawaySessions = sessions.count { it.durationMs in NEAR_RUNAWAY_LOWER_MS until RUNAWAY_THRESHOLD_MS },
+                microCheckScore = microChecks + burstReentries
             )
         }
     }

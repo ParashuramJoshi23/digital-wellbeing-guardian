@@ -16,4 +16,7 @@ interface SessionDao {
 
     @Query("SELECT * FROM sessions ORDER BY startTime DESC LIMIT :limit")
     fun recentSessions(limit: Int = 20): Flow<List<SessionEntity>>
+
+    @Query("SELECT * FROM sessions ORDER BY startTime DESC")
+    suspend fun allSessions(): List<SessionEntity>
 }

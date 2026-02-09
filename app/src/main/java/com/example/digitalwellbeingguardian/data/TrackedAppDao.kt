@@ -22,4 +22,7 @@ interface TrackedAppDao {
 
     @Query("SELECT packageName FROM tracked_apps WHERE isTracked = 1")
     suspend fun activePackages(): List<String>
+
+    @Query("SELECT * FROM tracked_apps ORDER BY displayName")
+    suspend fun allApps(): List<TrackedAppEntity>
 }
