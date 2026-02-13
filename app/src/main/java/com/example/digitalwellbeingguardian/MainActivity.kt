@@ -191,7 +191,12 @@ private fun GuardianApp(viewModel: MainViewModel) {
                         onToggle = viewModel::toggleTracked,
                         onAdd = viewModel::addTrackedApp,
                         initialReason = viewModel.loadDefaultReason(),
-                        onReasonSave = viewModel::saveDefaultReason
+                        onReasonSave = viewModel::saveDefaultReason,
+                        initialTargetPackage = viewModel.loadIntentTargetPackage(),
+                        initialCheckWindows = viewModel.loadCheckWindowsCsv(),
+                        initialGraceMinutes = viewModel.loadWindowGraceMinutes(),
+                        deferredToday = viewModel.loadTodayDeferredCount(),
+                        onIntentConfigSave = viewModel::saveIntentConfig
                     )
                 }
             }
@@ -281,13 +286,21 @@ private fun TrackedAppsTab(
     onToggle: (String, Boolean) -> Unit,
     onAdd: (String, String) -> Unit,
     initialReason: String,
-    onReasonSave: (String) -> Unit
+    onReasonSave: (String) -> Unit,
+    initialTargetPackage: String,
+    initialCheckWindows: String,
+    initialGraceMinutes: Int,
+    deferredToday: Int,
+    onIntentConfigSave: (String, String, Int) -> Unit
 ) {
     val context = LocalContext.current
 
     var packageName by remember { mutableStateOf("") }
     var label by remember { mutableStateOf("") }
     var reason by remember(initialReason) { mutableStateOf(initialReason) }
+    var targetPackage by remember(initialTargetPackage) { mutableStateOf(initialTargetPackage) }
+    var checkWindows by remember(initialCheckWindows) { mutableStateOf(initialCheckWindows) }
+    var graceMinutesText by remember(initialGraceMinutes) { mutableStateOf(initialGraceMinutes.toString()) }
 
     var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
     var appSearch by remember { mutableStateOf("") }
@@ -319,6 +332,42 @@ private fun TrackedAppsTab(
                         placeholder = { Text("e.g. finishing a match") }
                     )
                     Button(onClick = { onReasonSave(reason) }) { Text("Save reason") }
+                }
+            }
+        }
+
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Intent loop controls")
+                    Text("Deferred urges today: $deferredToday")
+                    OutlinedTextField(
+                        value = targetPackage,
+                        onValueChange = { targetPackage = it },
+                        label = { Text("Target package") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = checkWindows,
+                        onValueChange = { checkWindows = it },
+                        label = { Text("Check windows (comma separated, HH:mm)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = graceMinutesText,
+                        onValueChange = { graceMinutesText = it.filter { ch -> ch.isDigit() } },
+                        label = { Text("Window grace (minutes)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Button(onClick = {
+                        onIntentConfigSave(
+                            targetPackage,
+                            checkWindows,
+                            graceMinutesText.toIntOrNull() ?: 15
+                        )
+                    }) {
+                        Text("Save intent controls")
+                    }
                 }
             }
         }

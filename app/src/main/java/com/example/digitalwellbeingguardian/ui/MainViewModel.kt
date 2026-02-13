@@ -80,6 +80,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .orEmpty()
     }
 
+    fun saveIntentConfig(targetPackage: String, windowsCsv: String, graceMinutes: Int) {
+        getApplication<Application>()
+            .getSharedPreferences(UsageMonitorService.PREFS, Application.MODE_PRIVATE)
+            .edit()
+            .putString(UsageMonitorService.KEY_INTENT_TARGET_PACKAGE, targetPackage.ifBlank { "com.twitter.android" })
+            .putString(UsageMonitorService.KEY_CHECK_WINDOWS_CSV, windowsCsv.ifBlank { "11:30,16:30,21:00" })
+            .putInt(UsageMonitorService.KEY_WINDOW_GRACE_MIN, graceMinutes.coerceIn(0, 120))
+            .apply()
+    }
+
+    fun loadIntentTargetPackage(): String =
+        getApplication<Application>()
+            .getSharedPreferences(UsageMonitorService.PREFS, Application.MODE_PRIVATE)
+            .getString(UsageMonitorService.KEY_INTENT_TARGET_PACKAGE, "com.twitter.android")
+            .orEmpty()
+
+    fun loadCheckWindowsCsv(): String =
+        getApplication<Application>()
+            .getSharedPreferences(UsageMonitorService.PREFS, Application.MODE_PRIVATE)
+            .getString(UsageMonitorService.KEY_CHECK_WINDOWS_CSV, "11:30,16:30,21:00")
+            .orEmpty()
+
+    fun loadWindowGraceMinutes(): Int =
+        getApplication<Application>()
+            .getSharedPreferences(UsageMonitorService.PREFS, Application.MODE_PRIVATE)
+            .getInt(UsageMonitorService.KEY_WINDOW_GRACE_MIN, 15)
+
+    fun loadTodayDeferredCount(): Int {
+        val key = UsageMonitorService.KEY_DAILY_DEFERRED_PREFIX + LocalDate.now().toString()
+        return getApplication<Application>()
+            .getSharedPreferences(UsageMonitorService.PREFS, Application.MODE_PRIVATE)
+            .getInt(key, 0)
+    }
+
     suspend fun exportLogs(): Uri {
         val app = getApplication<Application>()
         val sessions = repository.allSessions()

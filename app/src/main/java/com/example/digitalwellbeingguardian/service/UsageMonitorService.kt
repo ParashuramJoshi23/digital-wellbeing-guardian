@@ -26,6 +26,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 
 class UsageMonitorService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -72,6 +74,8 @@ class UsageMonitorService : Service() {
         when (intent?.action) {
             ACTION_EXTEND_5 -> handleExtend(intent.getStringExtra(EXTRA_PACKAGE))
             ACTION_STOP_NOW -> handleStopNow(intent.getStringExtra(EXTRA_PACKAGE))
+            ACTION_ALLOW_ONCE -> handleAllowOnce(intent.getStringExtra(EXTRA_PACKAGE))
+            ACTION_MARK_DEFER -> handleMarkDefer(intent.getStringExtra(EXTRA_PACKAGE))
             ACTION_STOP_SERVICE -> {
                 stopSelf()
                 return START_NOT_STICKY
@@ -117,6 +121,10 @@ class UsageMonitorService : Service() {
                     thresholdNotified = false
                     pendingInterventionAction = null
                     pendingReason = null
+
+                    if (shouldPromptIntentGate(pkg, event.timeStamp)) {
+                        showIntentGateNotification(pkg)
+                    }
                 }
 
                 UsageEvents.Event.MOVE_TO_BACKGROUND -> {
@@ -183,6 +191,93 @@ class UsageMonitorService : Service() {
             }
             getSystemService(NotificationManager::class.java).cancel(INTERVENTION_NOTIFICATION_ID)
         }
+    }
+
+    private fun shouldPromptIntentGate(packageName: String, nowMs: Long): Boolean {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val target = prefs.getString(KEY_INTENT_TARGET_PACKAGE, "com.twitter.android")
+        if (packageName != target) return false
+
+        val allowUntil = prefs.getLong(KEY_ALLOW_UNTIL_MS, 0L)
+        if (allowUntil >= nowMs) return false
+
+        val graceMinutes = prefs.getInt(KEY_WINDOW_GRACE_MIN, 15).coerceAtLeast(0)
+        val windowsCsv = prefs.getString(KEY_CHECK_WINDOWS_CSV, "11:30,16:30,21:00").orEmpty()
+        if (isWithinAllowedWindow(nowMs, windowsCsv, graceMinutes)) return false
+
+        incrementDailyCounter(KEY_DAILY_INTENT_PROMPTS_PREFIX)
+        return true
+    }
+
+    private fun isWithinAllowedWindow(nowMs: Long, windowsCsv: String, graceMinutes: Int): Boolean {
+        val now = LocalTime.now()
+        val formatter = DateTimeFormatter.ofPattern("H:mm")
+        val grace = graceMinutes * 60L
+        return windowsCsv.split(',')
+            .mapNotNull { raw ->
+                runCatching { LocalTime.parse(raw.trim(), formatter) }.getOrNull()
+            }
+            .any { target ->
+                val diff = kotlin.math.abs(java.time.Duration.between(target, now).seconds)
+                diff <= grace
+            }
+    }
+
+    private fun incrementDailyCounter(prefix: String) {
+        val key = prefix + java.time.LocalDate.now().toString()
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val current = prefs.getInt(key, 0)
+        prefs.edit().putInt(key, current + 1).apply()
+    }
+
+    private fun handleAllowOnce(targetPackage: String?) {
+        if (targetPackage == null || targetPackage != activePackage) return
+        val until = System.currentTimeMillis() + 5 * 60 * 1000L
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putLong(KEY_ALLOW_UNTIL_MS, until).apply()
+        pendingInterventionAction = "ALLOW_ONCE"
+        getSystemService(NotificationManager::class.java).cancel(INTENT_NOTIFICATION_ID)
+    }
+
+    private fun handleMarkDefer(targetPackage: String?) {
+        if (targetPackage == null || targetPackage != activePackage) return
+        pendingInterventionAction = "DEFERRED_URGE"
+        incrementDailyCounter(KEY_DAILY_DEFERRED_PREFIX)
+        getSystemService(NotificationManager::class.java).cancel(INTENT_NOTIFICATION_ID)
+    }
+
+    private fun showIntentGateNotification(packageName: String) {
+        val allowIntent = PendingIntent.getService(
+            this,
+            203,
+            Intent(this, UsageMonitorService::class.java).apply {
+                action = ACTION_ALLOW_ONCE
+                putExtra(EXTRA_PACKAGE, packageName)
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val deferIntent = PendingIntent.getService(
+            this,
+            204,
+            Intent(this, UsageMonitorService::class.java).apply {
+                action = ACTION_MARK_DEFER
+                putExtra(EXTRA_PACKAGE, packageName)
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val notification = NotificationCompat.Builder(this, CHANNEL_INTERVENTION)
+            .setSmallIcon(R.drawable.ic_stat_guardian)
+            .setContentTitle("Intent check")
+            .setContentText("Outside your check windows for $packageName")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .addAction(0, "Defer", deferIntent)
+            .addAction(0, "Allow 5 min", allowIntent)
+            .setAutoCancel(true)
+            .build()
+
+        getSystemService(NotificationManager::class.java)
+            .notify(INTENT_NOTIFICATION_ID, notification)
     }
 
     private fun ongoingNotification(): Notification {
@@ -297,9 +392,12 @@ class UsageMonitorService : Service() {
         private const val CHANNEL_INTERVENTION = "guardian_intervention"
         private const val ONGOING_NOTIFICATION_ID = 3001
         private const val INTERVENTION_NOTIFICATION_ID = 3002
+        private const val INTENT_NOTIFICATION_ID = 3003
 
         const val ACTION_STOP_NOW = "guardian.action.STOP_NOW"
         const val ACTION_EXTEND_5 = "guardian.action.EXTEND_5"
+        const val ACTION_ALLOW_ONCE = "guardian.action.ALLOW_ONCE"
+        const val ACTION_MARK_DEFER = "guardian.action.MARK_DEFER"
         const val ACTION_STOP_SERVICE = "guardian.action.STOP_SERVICE"
         const val EXTRA_PACKAGE = "extra.package"
 
@@ -309,6 +407,12 @@ class UsageMonitorService : Service() {
         const val KEY_ACTIVE_PACKAGE = "active_package"
         const val KEY_ACTIVE_START_MS = "active_start_ms"
         const val KEY_LAST_POLL_MS = "last_poll_ms"
+        const val KEY_INTENT_TARGET_PACKAGE = "intent_target_package"
+        const val KEY_CHECK_WINDOWS_CSV = "check_windows_csv"
+        const val KEY_WINDOW_GRACE_MIN = "window_grace_minutes"
+        const val KEY_ALLOW_UNTIL_MS = "allow_until_ms"
+        const val KEY_DAILY_DEFERRED_PREFIX = "daily_deferred_"
+        const val KEY_DAILY_INTENT_PROMPTS_PREFIX = "daily_intent_prompts_"
 
         fun start(context: Context) {
             val intent = Intent(context, UsageMonitorService::class.java)
